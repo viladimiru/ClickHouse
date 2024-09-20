@@ -39,9 +39,11 @@
 #include <Planner/PlannerActionsVisitor.h>
 #include <Planner/PlannerContext.h>
 #include <Planner/Utils.h>
+#include <Processors/QueryPlan/JoinStepLogical.h>
 
 #include <Core/Settings.h>
 #include <Core/ServerSettings.h>
+#include <Interpreters/JoinInfo.h>
 
 namespace DB
 {
@@ -135,7 +137,7 @@ TableExpressionSet extractTableExpressionsSet(const QueryTreeNodePtr & node)
     return res;
 }
 
-std::set<JoinTableSide> extractJoinTableSidesFromExpression(//const ActionsDAG::Node * expression_root_node,
+std::set<JoinTableSide> extractJoinTableSidesFromExpression(
     const IQueryTreeNode * expression_root_node,
     const TableExpressionSet & left_table_expressions,
     const TableExpressionSet & right_table_expressions,
@@ -379,6 +381,22 @@ void buildJoinClause(
     }
 }
 
+static QueryTreeNodePtr getJoinExpressionFromNode(const JoinNode & join_node)
+{
+    /** It is possible to have constant value in JOIN ON section, that we need to ignore during DAG construction.
+      * If we do not ignore it, this function will be replaced by underlying constant.
+      * For example ASOF JOIN does not support JOIN with constants, and we should process it like ordinary JOIN.
+      *
+      * Example: SELECT * FROM (SELECT 1 AS id, 1 AS value) AS t1 ASOF LEFT JOIN (SELECT 1 AS id, 1 AS value) AS t2
+      * ON (t1.id = t2.id) AND 1 != 1 AND (t1.value >= t1.value);
+      */
+    const auto & join_expression = join_node.getJoinExpression();
+    const auto * constant_join_expression = join_expression->as<ConstantNode>();
+    if (constant_join_expression && constant_join_expression->hasSourceExpression())
+        return constant_join_expression->getSourceExpression();
+    return join_expression;
+}
+
 JoinClausesAndActions buildJoinClausesAndActions(
     const ColumnsWithTypeAndName & left_table_expression_columns,
     const ColumnsWithTypeAndName & right_table_expression_columns,
@@ -387,29 +405,15 @@ JoinClausesAndActions buildJoinClausesAndActions(
 {
     ActionsDAG left_join_actions(left_table_expression_columns);
     ActionsDAG right_join_actions(right_table_expression_columns);
+
     ColumnsWithTypeAndName mixed_table_expression_columns;
     for (const auto & left_column : left_table_expression_columns)
-    {
         mixed_table_expression_columns.push_back(left_column);
-    }
     for (const auto & right_column : right_table_expression_columns)
-    {
         mixed_table_expression_columns.push_back(right_column);
-    }
     ActionsDAG mixed_join_actions(mixed_table_expression_columns);
 
-    /** It is possible to have constant value in JOIN ON section, that we need to ignore during DAG construction.
-      * If we do not ignore it, this function will be replaced by underlying constant.
-      * For example ASOF JOIN does not support JOIN with constants, and we should process it like ordinary JOIN.
-      *
-      * Example: SELECT * FROM (SELECT 1 AS id, 1 AS value) AS t1 ASOF LEFT JOIN (SELECT 1 AS id, 1 AS value) AS t2
-      * ON (t1.id = t2.id) AND 1 != 1 AND (t1.value >= t1.value);
-      */
-    auto join_expression = join_node.getJoinExpression();
-    auto * constant_join_expression = join_expression->as<ConstantNode>();
-
-    if (constant_join_expression && constant_join_expression->hasSourceExpression())
-        join_expression = constant_join_expression->getSourceExpression();
+    auto join_expression = getJoinExpressionFromNode(join_node);
 
     auto * function_node = join_expression->as<FunctionNode>();
     if (!function_node)
@@ -654,6 +658,185 @@ JoinClausesAndActions buildJoinClausesAndActions(
     return result;
 }
 
+struct JoinInfoBuildContext
+{
+    explicit JoinInfoBuildContext(
+        const JoinNode & join_node_,
+        const ColumnsWithTypeAndName & left_table_columns_,
+        const ColumnsWithTypeAndName & right_table_columns_,
+        const PlannerContextPtr & planner_context_)
+        : join_node(join_node_)
+        , planner_context(planner_context_)
+        , left_table_columns(left_table_columns_)
+        , right_table_columns(right_table_columns_)
+        , left_table_expression_set(extractTableExpressionsSet(join_node.getLeftTableExpression()))
+        , right_table_expression_set(extractTableExpressionsSet(join_node.getRightTableExpression()))
+        , result_join_expression_actions(left_table_columns, right_table_columns)
+    {
+        result_join_info.kind = join_node.getKind();
+        result_join_info.strictness = join_node.getStrictness();
+        result_join_info.locality = join_node.getLocality();
+    }
+
+    enum class JoinSource : uint8_t { None, Left, Right, Both };
+
+    JoinSource getExpressionSource(const QueryTreeNodePtr & node)
+    {
+        auto res = extractJoinTableSidesFromExpression(node.get(), left_table_expression_set, right_table_expression_set, join_node);
+        if (res.empty())
+            return JoinSource::None;
+        if (res.size() == 1)
+        {
+            if (*res.begin() == JoinTableSide::Left)
+                return JoinSource::Left;
+            return JoinSource::Right;
+        }
+        return JoinSource::Both;
+    }
+
+    JoinActionRef addExpression(const QueryTreeNodePtr & node, JoinSource src)
+    {
+        const ActionsDAG::Node * dag_node_ptr = nullptr;
+        if (src == JoinSource::None)
+            dag_node_ptr = appendExpression(result_join_expression_actions.post_join_actions, node, planner_context, join_node);
+        else if (src == JoinSource::Left)
+            dag_node_ptr = appendExpression(result_join_expression_actions.left_pre_join_actions, node, planner_context, join_node);
+        else if (src == JoinSource::Right)
+            dag_node_ptr = appendExpression(result_join_expression_actions.right_pre_join_actions, node, planner_context, join_node);
+        else
+            dag_node_ptr = appendExpression(result_join_expression_actions.post_join_actions, node, planner_context, join_node);
+        return JoinActionRef(dag_node_ptr);
+    }
+
+    const JoinNode & join_node;
+    const PlannerContextPtr & planner_context;
+
+    ColumnsWithTypeAndName left_table_columns;
+    ColumnsWithTypeAndName right_table_columns;
+
+    TableExpressionSet left_table_expression_set;
+    TableExpressionSet right_table_expression_set;
+
+    JoinExpressionActions result_join_expression_actions;
+    JoinInfo result_join_info;
+};
+
+bool tryGetJoinPredicate(const FunctionNode * function_node, JoinInfoBuildContext & builder_context, JoinCondition & join_condition)
+{
+    if (!function_node || function_node->getArguments().getNodes().size() != 2)
+        return false;
+
+    auto predicate_operator = getJoinPredicateOperator(function_node->getFunctionName());
+    if (!predicate_operator.has_value())
+        return false;
+
+    auto left_node = function_node->getArguments().getNodes().at(0);
+    auto left_expr_source = builder_context.getExpressionSource(left_node);
+
+    auto right_node = function_node->getArguments().getNodes().at(1);
+    auto right_expr_source = builder_context.getExpressionSource(right_node);
+
+    if (left_expr_source == JoinInfoBuildContext::JoinSource::Left && right_expr_source == JoinInfoBuildContext::JoinSource::Right)
+    {
+        join_condition.predicates.emplace_back(JoinPredicate{
+            builder_context.addExpression(left_node, JoinInfoBuildContext::JoinSource::Left),
+            builder_context.addExpression(right_node, JoinInfoBuildContext::JoinSource::Right),
+            predicate_operator.value()});
+        return true;
+    }
+
+    if (left_expr_source == JoinInfoBuildContext::JoinSource::Right && right_expr_source == JoinInfoBuildContext::JoinSource::Left)
+    {
+        join_condition.predicates.push_back(JoinPredicate{
+            builder_context.addExpression(right_node, JoinInfoBuildContext::JoinSource::Left),
+            builder_context.addExpression(left_node, JoinInfoBuildContext::JoinSource::Right),
+            reversePredicateOperator(predicate_operator.value())});
+        return true;
+    }
+
+    return false;
+}
+
+void buildJoinCondition(const QueryTreeNodePtr & node, JoinInfoBuildContext & builder_context, JoinCondition & join_condition)
+{
+    std::string function_name;
+    const auto * function_node = node->as<FunctionNode>();
+    if (function_node)
+        function_name = function_node->getFunction()->getName();
+
+    if (function_name == "and")
+    {
+        for (const auto & child : function_node->getArguments())
+            buildJoinCondition(child, builder_context, join_condition);
+        return;
+    }
+
+    bool is_predicate = tryGetJoinPredicate(function_node, builder_context, join_condition);
+    if (is_predicate)
+        return;
+
+    auto expr_source = builder_context.getExpressionSource(node);
+    if (expr_source == JoinInfoBuildContext::JoinSource::Left)
+        join_condition.left_filter_conditions.push_back(builder_context.addExpression(node, expr_source));
+    else if (expr_source == JoinInfoBuildContext::JoinSource::Right)
+        join_condition.right_filter_conditions.push_back(builder_context.addExpression(node, expr_source));
+    else
+        join_condition.residual_conditions.push_back(builder_context.addExpression(node, expr_source));
+}
+
+void buildDisjunctiveJoinConditions(const QueryTreeNodePtr & node, JoinInfoBuildContext & builder_context, std::vector<JoinCondition> & join_conditions)
+{
+    auto * function_node = node->as<FunctionNode>();
+    if (!function_node)
+        throw Exception(ErrorCodes::INVALID_JOIN_ON_EXPRESSION,
+            "JOIN {} join expression expected function",
+            node->formatASTForErrorMessage());
+
+    const auto & function_name = function_node->getFunction()->getName();
+
+    if (function_name == "or")
+    {
+        for (const auto & child : function_node->getArguments())
+            buildDisjunctiveJoinConditions(child, builder_context, join_conditions);
+        return;
+    }
+    buildJoinCondition(node, builder_context, join_conditions.emplace_back());
+}
+
+}
+
+std::unique_ptr<JoinStepLogical> buildJoinStepLogical(
+    const DataStream & left_stream,
+    const DataStream & right_stream,
+    const NameSet & outer_scope_columns,
+    const JoinNode & join_node,
+    const PlannerContextPtr & planner_context)
+{
+    const auto & left_columns = left_stream.header.getColumnsWithTypeAndName();
+    const auto & right_columns = right_stream.header.getColumnsWithTypeAndName();
+    JoinInfoBuildContext build_context(join_node, left_columns, right_columns, planner_context);
+
+    if (join_node.isUsingJoinExpression())
+    {
+        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "TODO");
+    }
+
+    auto join_expression_node = getJoinExpressionFromNode(join_node);
+
+    const auto * function_node = join_expression_node->as<FunctionNode>();
+    if (!function_node)
+        throw Exception(ErrorCodes::INVALID_JOIN_ON_EXPRESSION,
+            "JOIN {} join expression expected function",
+            join_node.formatASTForErrorMessage());
+    buildDisjunctiveJoinConditions(join_expression_node, build_context, build_context.result_join_info.expression.disjunctive_conditions);
+
+    return std::make_unique<JoinStepLogical>(
+        left_stream,
+        right_stream,
+        std::move(build_context.result_join_info),
+        std::move(build_context.result_join_expression_actions),
+        Names(outer_scope_columns.begin(), outer_scope_columns.end()),
+        planner_context->getQueryContext());
 }
 
 JoinClausesAndActions buildJoinClausesAndActions(
