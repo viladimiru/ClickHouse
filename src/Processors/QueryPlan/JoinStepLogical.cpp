@@ -1,5 +1,7 @@
 #include <Processors/QueryPlan/JoinStepLogical.h>
 
+#include <Processors/QueryPlan/JoinStep.h>
+
 #include <QueryPipeline/QueryPipelineBuilder.h>
 #include <Processors/Transforms/JoiningTransform.h>
 #include <Interpreters/IJoin.h>
@@ -77,11 +79,9 @@ JoinStepLogical::JoinStepLogical(
     updateInputStreams(DataStreams{left_stream_, right_stream_});
 }
 
-QueryPipelineBuilderPtr JoinStepLogical::updatePipeline(QueryPipelineBuilders pipelines, const BuildQueryPipelineSettings & settings)
+QueryPipelineBuilderPtr JoinStepLogical::updatePipeline(QueryPipelineBuilders /* pipelines */, const BuildQueryPipelineSettings & /* settings */)
 {
-    UNUSED(pipelines);
-    UNUSED(settings);
-    throw Exception(ErrorCodes::NOT_IMPLEMENTED, "");
+    throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Cannot execute JoinStepLogical, it should be converted physical step first");
 }
 
 

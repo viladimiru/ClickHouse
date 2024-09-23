@@ -817,9 +817,10 @@ std::unique_ptr<JoinStepLogical> buildJoinStepLogical(
     JoinInfoBuildContext build_context(join_node, left_columns, right_columns, planner_context);
 
     if (join_node.isUsingJoinExpression())
-    {
-        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "TODO");
-    }
+        return nullptr;
+
+    if (tryExtractConstantFromConditionNode(join_node.getJoinExpression()).has_value())
+        return nullptr;
 
     auto join_expression_node = getJoinExpressionFromNode(join_node);
 
@@ -828,6 +829,7 @@ std::unique_ptr<JoinStepLogical> buildJoinStepLogical(
         throw Exception(ErrorCodes::INVALID_JOIN_ON_EXPRESSION,
             "JOIN {} join expression expected function",
             join_node.formatASTForErrorMessage());
+
     buildDisjunctiveJoinConditions(join_expression_node, build_context, build_context.result_join_info.expression.disjunctive_conditions);
 
     return std::make_unique<JoinStepLogical>(
