@@ -397,14 +397,6 @@ if __name__ == "__main__":
         )
     )
 
-    res = Result.create_from(results=results, stopwatch=stop_watch).dump()
-
-    if not res.is_ok():
-        print("Style check: failed")
-        for result in results:
-            if not result.is_ok():
-                print("Failed check:")
-                print("  |  ", result)
-        sys.exit(1)
-    else:
-        print("Style check: ok")
+    Result.create_from(
+        results=results, stopwatch=stop_watch
+    ).dump().finish_job_accordingly()
