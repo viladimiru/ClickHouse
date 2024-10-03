@@ -1,5 +1,6 @@
 #include <Storages/MergeTree/MergeTreeSettings.h>
 #include <Storages/MergeTree/ReplicatedMergeTreeAttachThread.h>
+#include <Storages/MergeTree/ReplicatedMergeTreeQueue.h>
 #include <Storages/StorageReplicatedMergeTree.h>
 #include <Common/ZooKeeper/IKeeper.h>
 
@@ -122,7 +123,6 @@ Int32 ReplicatedMergeTreeAttachThread::fixReplicaMetadataVersionIfNeeded(zkutil:
 {
     const String & zookeeper_path = storage.zookeeper_path;
     const String & replica_path = storage.replica_path;
-    const bool replica_readonly = storage.is_readonly;
 
     for (size_t i = 0; i != 2; ++i)
     {
@@ -133,7 +133,7 @@ Int32 ReplicatedMergeTreeAttachThread::fixReplicaMetadataVersionIfNeeded(zkutil:
 
         const Int32 metadata_version = parse<Int32>(replica_metadata_version_str);
 
-        if (metadata_version != 0 || replica_readonly)
+        if (metadata_version != 0)
         {
             /// No need to fix anything
             return metadata_version;
@@ -148,7 +148,7 @@ Int32 ReplicatedMergeTreeAttachThread::fixReplicaMetadataVersionIfNeeded(zkutil:
         }
 
         ReplicatedMergeTreeQueue & queue = storage.queue;
-        queue.pullLogsToQueue(zookeeper);
+        queue.pullLogsToQueue(zookeeper, {}, ReplicatedMergeTreeQueue::LOAD);
         if (queue.getStatus().metadata_alters_in_queue != 0)
         {
             LOG_DEBUG(log, "No need to update metadata_version as there are ALTER_METADATA entries in the queue");
