@@ -50,7 +50,7 @@ def test_fix_metadata_version(start_cluster):
 
     node.query(
         f"""
-        DROP TABLE IF EXISTS t;
+        DROP TABLE IF EXISTS t SYNC;
         CREATE TABLE t
         (
             `x` UInt32
