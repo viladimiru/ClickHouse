@@ -16,6 +16,6 @@ grep_options=(
     -e 'Empty query'
 )
 
-ASAN_OPTIONS=$ASAN_OPTIONS:exitcode=3 $CLICKHOUSE_LOCAL --history_file /no/such/directory 2>&1 | grep -v "${grep_options[@]}"
+ASAN_OPTIONS=$ASAN_OPTIONS:exitcode=3 $CLICKHOUSE_LOCAL --history_file /no/such/directory |& grep -v "${grep_options[@]}"
 # on sanitizer error the code will be not 1, but 3
 echo $?
