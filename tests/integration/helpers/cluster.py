@@ -82,6 +82,8 @@ CLICKHOUSE_ERROR_LOG_FILE = "/var/log/clickhouse-server/clickhouse-server.err.lo
 # This means that this minimum need to be, at least, 1 year older than the current release
 CLICKHOUSE_CI_MIN_TESTED_VERSION = "23.3"
 
+ZOOKEEPER_CONTAINERS = ("zoo1", "zoo2", "zoo3")
+
 
 # to create docker-compose env file
 def _create_env_file(path, variables):
@@ -2141,6 +2143,11 @@ class ClickHouseCluster:
         container_id = self.get_container_id(instance_name)
         return self.docker_client.api.logs(container_id).decode()
 
+    def query_zookeeper(self, query, node=ZOOKEEPER_CONTAINERS[0], nothrow=False):
+        cmd = f'clickhouse keeper-client -p {self.zookeeper_port} -q "{query}"'
+        container_id = self.get_container_id(node) 
+        return self.exec_in_container(container_id, cmd, nothrow=nothrow, use_cli=False)
+
     def exec_in_container(
         self, container_id, cmd, detach=False, nothrow=False, use_cli=True, **kwargs
     ):
@@ -2476,7 +2483,7 @@ class ClickHouseCluster:
         start = time.time()
         while time.time() - start < timeout:
             try:
-                for instance in ["zoo1", "zoo2", "zoo3"]:
+                for instance in ZOOKEEPER_CONTAINERS:
                     conn = self.get_kazoo_client(instance)
                     conn.get_children("/")
                     conn.stop()
@@ -2493,7 +2500,7 @@ class ClickHouseCluster:
         start = time.time()
         while time.time() - start < timeout:
             try:
-                for instance in ["zoo1", "zoo2", "zoo3"]:
+                for instance in ZOOKEEPER_CONTAINERS:
                     conn = self.get_kazoo_client(instance)
                     conn.get_children("/")
                     conn.stop()
@@ -3309,7 +3316,7 @@ class ClickHouseCluster:
         return zk
 
     def run_kazoo_commands_with_retries(
-        self, kazoo_callback, zoo_instance_name="zoo1", repeats=1, sleep_for=1
+        self, kazoo_callback, zoo_instance_name=ZOOKEEPER_CONTAINERS[0], repeats=1, sleep_for=1
     ):
         zk = self.get_kazoo_client(zoo_instance_name)
         logging.debug(
@@ -4726,9 +4733,8 @@ class ClickHouseInstance:
             depends_on.append("nats1")
 
         if self.with_zookeeper:
-            depends_on.append("zoo1")
-            depends_on.append("zoo2")
-            depends_on.append("zoo3")
+            for zookeeper_container in ZOOKEEPER_CONTAINERS:
+                depends_on.append(zookeeper_container)
 
         if self.with_minio:
             depends_on.append("minio1")
