@@ -64,9 +64,7 @@ def test_fix_metadata_version(start_cluster):
 
     assert get_metadata_versions() == (1, 1)
 
-    cluster.query_zookeeper(
-        f"set '{replica_path}/metadata_version' '0'"
-    )
+    cluster.query_zookeeper(f"set '{replica_path}/metadata_version' '0'")
 
     assert get_metadata_versions() == (1, 0)
 

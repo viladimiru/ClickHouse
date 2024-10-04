@@ -2061,7 +2061,7 @@ class ClickHouseCluster:
 
     def query_zookeeper(self, query, node=ZOOKEEPER_CONTAINERS[0], nothrow=False):
         cmd = f'clickhouse keeper-client -p {self.zookeeper_port} -q "{query}"'
-        container_id = self.get_container_id(node) 
+        container_id = self.get_container_id(node)
         return self.exec_in_container(container_id, cmd, nothrow=nothrow, use_cli=False)
 
     def exec_in_container(
@@ -3222,7 +3222,11 @@ class ClickHouseCluster:
         return zk
 
     def run_kazoo_commands_with_retries(
-        self, kazoo_callback, zoo_instance_name=ZOOKEEPER_CONTAINERS[0], repeats=1, sleep_for=1
+        self,
+        kazoo_callback,
+        zoo_instance_name=ZOOKEEPER_CONTAINERS[0],
+        repeats=1,
+        sleep_for=1,
     ):
         zk = self.get_kazoo_client(zoo_instance_name)
         logging.debug(
