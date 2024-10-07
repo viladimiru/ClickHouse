@@ -137,6 +137,7 @@ Checks: [
   '-readability-suspicious-call-argument',
   '-readability-uppercase-literal-suffix',
   '-readability-use-anyofallof',
+  '-readability-math-missing-parentheses',
 
   '-zircon-*'
 ]
