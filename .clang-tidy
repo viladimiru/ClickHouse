@@ -90,6 +90,7 @@ Checks: [
   '-misc-non-private-member-variables-in-classes',
   '-misc-confusable-identifiers', # useful but slooo
   '-misc-use-anonymous-namespace',
+  '-misc-use-internal-linkage',
 
   '-modernize-avoid-c-arrays',
   '-modernize-concat-nested-namespaces',
