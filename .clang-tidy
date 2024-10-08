@@ -16,6 +16,9 @@ Checks: [
 
   '-android-*',
 
+  '-boost-use-ranges',
+  '-modernize-use-ranges',
+
   '-bugprone-assignment-in-if-condition',
   '-bugprone-branch-clone',
   '-bugprone-easily-swappable-parameters',
